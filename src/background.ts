@@ -1,4 +1,4 @@
-let TOURNAMENT_NAMES = {};
+let TOURNAMENT_NAMES: Record<string, any> = {};
 
 chrome.storage.local.get("TOURNAMENT_NAMES", function (result) {
   TOURNAMENT_NAMES = result || {};
@@ -14,9 +14,10 @@ chrome.webNavigation.onCompleted.addListener(
       chrome.scripting.executeScript(
         {
           target: { tabId },
-          function: getTournamentName,
+          func: getTournamentName,
         },
         (results) => {
+          if (!results || !results[0]) return;
           const { result } = results[0];
           if (result) {
             TOURNAMENT_NAMES[id] = result;
@@ -53,5 +54,5 @@ chrome.webNavigation.onCompleted.addListener(
 );
 
 function getTournamentName() {
-  return document.querySelector("h1").innerText;
+  return document.querySelector("h1")?.innerText || "";
 }
