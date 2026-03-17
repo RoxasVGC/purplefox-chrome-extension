@@ -318,7 +318,6 @@ export default defineComponent({
   },
 });
 
-// --- FUNZIONI ORIGINALI ---
 
 function extractResultGem() {
   const PLAYER_REGEXP = /^(.+) \((.+)\)$/;
@@ -550,8 +549,6 @@ function exportHeroes() {
 }
 
 
-// --- NUOVE FUNZIONI RK9 (POKEMON) ---
-
 function extractRk9Pairings() {
     const results: any[] = [];
     let errors = 0;
@@ -621,7 +618,6 @@ function extractRk9Players() {
 }
 
 async function extractResultKgcn() {
-  // 1. Estrapola l'Event ID dall'URL (es: https://shp.cardgame-network.konami.net/mt/home/#/tournament-duel/E25-387113)
   const match = window.location.hash.match(/\/tournament-duel\/([^\/]+)/);
   if (!match) {
     return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
@@ -633,7 +629,6 @@ async function extractResultKgcn() {
   try {
     const response = await fetch(url, {
       method: "GET",
-      // includiamo le credenziali nel caso in cui l'API si basi sui cookie di sessione di Konami
       credentials: "include", 
     });
 
@@ -647,7 +642,6 @@ async function extractResultKgcn() {
     const results = compeList.map((matchData: any) => {
       let matchResult = "PENDING";
       
-      // Traduzione dello status
       if (matchData.result === "WIN") {
         matchResult = "1WIN";
       } else if (matchData.result === "LOSE") {
@@ -676,14 +670,12 @@ async function extractResultKgcn() {
 }
 
 async function extractStandingKgcn() {
-  // Estrapola l'Event ID dall'URL
   const match = window.location.hash.match(/\/(?:tournament|tournament-duel)\/([^\/]+)/);
   if (!match) {
     return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
   }
   
   const eventId = match[1];
-  // Utilizziamo il link dell'API che mi hai fornito
   const url = `https://shp.cardgame-network.konami.net/mt/tournament/${eventId}/ranking`;
 
   try {
@@ -697,15 +689,13 @@ async function extractStandingKgcn() {
     }
 
     const json = await response.json();
-    // A seconda di come risponde Konami, i dati potrebbero essere nell'array principale o in un oggetto .data
     const rankingList = Array.isArray(json) ? json : (json.data || []);
 
     const results = rankingList.map((player: any) => {
-      // Calcolo dei punti: Vittoria = 3, Pareggio = 1
       const points = (player.wins * 3) + (player.draws * 0);
       
       return {
-        gameId: player.cossyId, // Lo manteniamo stringa per preservare eventuali zeri iniziali del cossy ID
+        gameId: player.cossyId,
         isDropped: player.leavingAwayStatus === 9,
         name: player.cossyName,
         rank: player.rankNo,
