@@ -37,22 +37,26 @@
           Extract players
         </button>
       </div>
-      <div v-if="canExtractHeroes" class="flex justify-center mt-2">
+<div v-if="canExtractHeroes" class="flex justify-center mt-2">
         <button class="button" @click="extractHeroes" :disabled="isLoading">
           Extract heroes
         </button>
       </div>
-      <div v-else-if="canExtractResults" class="flex justify-center mt-2">
+
+      <div v-if="canExtractResults" class="flex justify-center mt-2">
         <button class="button" @click="extractResults" :disabled="isLoading">
           Extract results
         </button>
       </div>
-      <div v-else-if="canExtractStandings" class="flex justify-center mt-2">
+
+      <div v-if="canExtractStandings" class="flex justify-center mt-2">
         <button class="button" @click="extractStanding" :disabled="isLoading">
           Extract standings
         </button>
       </div>
-      <p v-else-if="!['rk9', 'purplefox'].includes(currentSoftware || '')">No action possible on this page</p>
+
+
+      <p v-else-if="!['rk9', 'purplefox', 'kgcn'].includes(currentSoftware || '')">No action possible on this page</p>
 
       <div v-if="isLoading" class="loader"></div>
       <p v-if="message" class="mt-2">{{ message }}</p>
@@ -198,6 +202,7 @@ export default defineComponent({
           func: (
             this.currentSoftware === "gem" ? extractResultGem :
             this.currentSoftware === "rk9" ? extractRk9Pairings :
+            this.currentSoftware === "kgcn" ? extractResultKgcn :
             extractResultCarde
           ) as any,
           args: [this.token || ""],
@@ -254,7 +259,11 @@ export default defineComponent({
       chrome.scripting.executeScript(
         {
           target: { tabId: tab.id as number },
-          func: (this.currentSoftware === "rk9" ? extractRk9Standings : extractStandingCarde) as any,
+          func: (
+            this.currentSoftware === "rk9" ? extractRk9Standings : 
+            this.currentSoftware === "kgcn" ? extractStandingKgcn :
+            extractStandingCarde
+          ) as any,
           args: [this.token || ""],
         },
         (results: any) => {
@@ -609,6 +618,110 @@ function extractRk9Standings() {
 
 function extractRk9Players() {
     return { value: [], message: "RK9 Players in progress!", errorCount: 0 };
+}
+
+async function extractResultKgcn() {
+  // 1. Estrapola l'Event ID dall'URL (es: https://shp.cardgame-network.konami.net/mt/home/#/tournament-duel/E25-387113)
+  const match = window.location.hash.match(/\/tournament-duel\/([^\/]+)/);
+  if (!match) {
+    return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
+  }
+  
+  const eventId = match[1];
+  const url = `https://shp.cardgame-network.konami.net/mt/tournament-underway/round/${eventId}/0?upd=off`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      // includiamo le credenziali nel caso in cui l'API si basi sui cookie di sessione di Konami
+      credentials: "include", 
+    });
+
+    if (!response.ok) {
+      return { value: [], message: `Error fetching data: ${response.statusText}`, errorCount: 1 };
+    }
+
+    const json = await response.json();
+    const compeList = json.data?.compeList || [];
+
+    const results = compeList.map((matchData: any) => {
+      let matchResult = "PENDING";
+      
+      // Traduzione dello status
+      if (matchData.result === "WIN") {
+        matchResult = "1WIN";
+      } else if (matchData.result === "LOSE") {
+        matchResult = "2WIN";
+      } else if (matchData.result === "BOTH_DEFEAT") {
+        matchResult = "DRAW";
+      }
+
+      return {
+        playerName1: matchData.user1 ? matchData.user1.name : "",
+        playerName2: matchData.user2 ? matchData.user2.name : "",
+        result: matchResult,
+        tableNumber: parseInt(matchData.displayTableName, 10) || 0
+      };
+    });
+
+    return { 
+      value: results, 
+      message: "KGCN Extraction complete. Copied.", 
+      errorCount: 0 
+    };
+
+  } catch (error: any) {
+    return { value: [], message: `Error: ${error.message}`, errorCount: 1 };
+  }
+}
+
+async function extractStandingKgcn() {
+  // Estrapola l'Event ID dall'URL
+  const match = window.location.hash.match(/\/(?:tournament|tournament-duel)\/([^\/]+)/);
+  if (!match) {
+    return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
+  }
+  
+  const eventId = match[1];
+  // Utilizziamo il link dell'API che mi hai fornito
+  const url = `https://shp.cardgame-network.konami.net/mt/tournament/${eventId}/ranking`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include", 
+    });
+
+    if (!response.ok) {
+      return { value: [], message: `Error fetching data: ${response.statusText}`, errorCount: 1 };
+    }
+
+    const json = await response.json();
+    // A seconda di come risponde Konami, i dati potrebbero essere nell'array principale o in un oggetto .data
+    const rankingList = Array.isArray(json) ? json : (json.data || []);
+
+    const results = rankingList.map((player: any) => {
+      // Calcolo dei punti: Vittoria = 3, Pareggio = 1
+      const points = (player.wins * 3) + (player.draws * 0);
+      
+      return {
+        gameId: player.cossyId, // Lo manteniamo stringa per preservare eventuali zeri iniziali del cossy ID
+        isDropped: player.leavingAwayStatus === 9,
+        name: player.cossyName,
+        rank: player.rankNo,
+        standing: points
+      };
+    });
+
+    return { 
+      value: results, 
+      message: "KGCN Standings Extraction complete. Copied.", 
+      errorCount: 0 
+    };
+
+  } catch (error: any) {
+    return { value: [], message: `Error: ${error.message}`, errorCount: 1 };
+  }
 }
 
 </script>

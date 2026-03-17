@@ -19,5 +19,10 @@
         }
     },
     "permissions": ["activeTab", "scripting", "webNavigation", "storage", "cookies"],
-    "host_permissions": ["*://*.gem.fabtcg.com/*", "*://*.carde.io/*", "*://*.rk9.gg/*"]
+    "host_permissions": [
+        "*://*.gem.fabtcg.com/*", 
+        "*://*.carde.io/*", 
+        "*://*.rk9.gg/*",
+        "*://*.cardgame-network.konami.net/*"
+    ]
 }
