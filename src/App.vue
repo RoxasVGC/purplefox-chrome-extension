@@ -46,6 +46,12 @@
         </button>
       </div>
 
+      <div v-if="currentSoftware === 'purplefox'" class="flex justify-center mt-2">
+        <button class="button" @click="extractDrops" :disabled="isLoading">
+          Extract drops
+        </button>
+      </div>
+
       <p v-else-if="!['carde', 'purplefox', 'kgcn'].includes(currentSoftware || '')">No action possible on this page</p>
 
       <div v-if="isLoading" class="loader"></div>
@@ -405,8 +411,114 @@ export default defineComponent({
         }
       );
     },
+    async extractDrops() {
+      this.isLoading = true;
+      let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return;
+      
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tab.id as number },
+          func: extractPurpleFoxDrops,
+        },
+        (results: chrome.scripting.InjectionResult[]) => {
+          if ((chrome.runtime as any).lastError || !results || !results[0]) {
+            this.message = "Script Error";
+            this.isLoading = false;
+            return;
+          }
+          const result = results[0].result as ScriptResult<string[]>;
+          if (result.errorCount === 0 && result.value) {
+            navigator.clipboard.writeText(result.value.join("\n"));
+          }
+          this.message = result.message;
+          
+          if (result.errorCount === 0) {
+            setTimeout(() => {
+              this.message = "";
+            }, 2000);
+          }
+          this.isLoading = false;
+        }
+      );
+    },
   },
 });
+
+const extractPurpleFoxDrops = async (): Promise<ScriptResult<string[]>> => {
+  const getSupabaseToken = () => {
+    let latestToken = null;
+    let maxExpiry = 0;
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      try {
+        const item = JSON.parse(localStorage.getItem(key) || "{}");
+        let token = null;
+        let expiry = 0;
+
+        if (item && item.currentSession && item.currentSession.access_token) {
+          token = item.currentSession.access_token;
+          expiry = item.expiresAt || item.currentSession.expires_at || 0;
+        } else if (item && item.access_token) {
+          token = item.access_token;
+          expiry = item.expires_at || item.expiresAt || 0;
+        }
+
+        if (token && expiry > maxExpiry) {
+          latestToken = token;
+          maxExpiry = expiry;
+        }
+      } catch (e) {
+        console.error(`Failed to parse localStorage item with key: ${key}`, e);
+      }
+    }
+    return latestToken;
+  };
+
+  const rawToken = getSupabaseToken();
+  if (!rawToken) return { value: [], errorCount: 1, message: "Token not found. Please log in to PurpleFox." };
+
+  const match = window.location.href.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+  if (!match) return { value: [], errorCount: 1, message: "Tournament ID not found in the URL." };
+  const tournamentId = match[1];
+
+  const SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYzNDk5MTIyMiwiZXhwIjoxOTUwNTY3MjIyfQ.i26CuuxL44qZ4roGI3Akzdpx57bGANc4ZaK-nVEwC6I";
+
+  try {
+    const dropsUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/tournament_drops?select=*&tournamentId=eq.${tournamentId}`;
+    const dropsResponse = await fetch(dropsUrl, {
+      method: "GET",
+      headers: {
+        "apikey": SUPABASE_API_KEY,
+        "Authorization": `Bearer ${rawToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    if (!dropsResponse.ok) throw new Error("Could not fetch drops.");
+    const data = await dropsResponse.json();
+
+    const trueCossyIds = data
+      .filter((drop: any) => drop.isChecked === false)
+      .map((drop: any) => {
+        const proxyId = drop.playerGameId;
+        if (!proxyId) return "";
+        try {
+          return "0" + (BigInt(proxyId) ^ BigInt(8392745016)).toString();
+        } catch {
+          return "0" + proxyId;
+        }
+      })
+      .filter((id: string) => id !== "");
+
+    return { value: trueCossyIds, errorCount: 0, message: "Drops copied to clipboard!" };
+  } catch (err: unknown) {
+    return { value: [], errorCount: 1, message: (err as Error).message || "An error occurred." };
+  }
+};
 
 const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
 
