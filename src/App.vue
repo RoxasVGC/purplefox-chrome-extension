@@ -586,7 +586,7 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
     });
 
     // Sort highest round first, then highest table number first (with empty tables at the bottom)
-    enrichedData.sort((a, b) => {
+    enrichedData.sort((a: Record<string, any>, b: Record<string, any>) => {
       const roundA = a.round || 0;
       const roundB = b.round || 0;
       if (roundA !== roundB) return roundB - roundA; // Highest round first
@@ -597,7 +597,7 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
     });
 
     const headers = ["Player", "ID", "Table", "Round", "Infraction", "Category", "Penalty", "Time Extension", "Description", "Judge"];
-    const csvRows = enrichedData.map((row) => {
+    const csvRows = enrichedData.map((row: Record<string, any>) => {
       const category = row.type ? row.type.split(" - ")[0].trim() : "";
       const formattedRound = row.round ? `R${row.round}` : "";
       const mappedRow = [
