@@ -1106,11 +1106,19 @@ async function extractResultKgcn(token: string, starredPlayers: string) {
     });
     if (roundResponse.ok) {
       const roundText = await roundResponse.text();
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(roundText, "text/xml");
-      roundId = xmlDoc.querySelector("Integer")?.textContent || '0';
-      if (roundId !== '0') {
-        extractionMethod = 'API (/nowRound)';
+      try {
+        const data = JSON.parse(roundText);
+        if (data && data.data !== undefined) {
+          roundId = String(data.data);
+          extractionMethod = 'API (/nowRound JSON)';
+        }
+      } catch {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(roundText, "text/xml");
+        roundId = xmlDoc.querySelector("Integer")?.textContent || '0';
+        if (roundId !== '0') {
+          extractionMethod = 'API (/nowRound XML)';
+        }
       }
     }
   } catch (e) {
@@ -1123,7 +1131,7 @@ async function extractResultKgcn(token: string, starredPlayers: string) {
     extractionMethod = 'URL Hash';
   }
 
-  const url = `https://shp.cardgame-network.konami.net/mt/tournament-underway/round/${eventId}/${roundId}?upd=off`;
+  const url = `https://shp.cardgame-network.konami.net/mt/tournament-underway/round/${eventId}/0?upd=off`;
 
   try {
     const response = await fetch(url, {
@@ -1136,18 +1144,65 @@ async function extractResultKgcn(token: string, starredPlayers: string) {
     }
 
     const responseText = await response.text();
+
+    try {
+      const data = JSON.parse(responseText);
+      if (data && data.data && data.data.compeList) {
+        const results = data.data.compeList.map((matchNode: any) => {
+          let matchResult: string | null = null;
+          const resultText = matchNode.result;
+          
+          if (resultText === "WIN") {
+            matchResult = "1WIN";
+          } else if (resultText === "LOSE") {
+            matchResult = "2WIN";
+          } else if (resultText === "BOTH_DEFEAT" || resultText === "DRAW") {
+            matchResult = "DRAW";
+          }
+
+          const user1Node = matchNode.user1;
+          const user2Node = matchNode.user2;
+
+          const id1 = user1Node?.cossyId || "";
+          const name1 = user1Node?.name || "";
+          const id2 = user2Node?.cossyId || "";
+          const name2 = user2Node?.name || "";
+
+          const formattedName1 = formatName(name1);
+          const formattedName2 = formatName(name2);
+
+          return {
+            playerGameId1: obfuscateId(id1) || null,
+            playerName1: isPlayerWatched(name1, id1) ? `⭐ ${formattedName1}` : formattedName1,
+            playerGameId2: obfuscateId(id2) || null,
+            playerName2: isPlayerWatched(name2, id2) ? `⭐ ${formattedName2}` : formattedName2,
+            result: matchResult,
+            tableNumber: parseInt(matchNode.displayTableName || "0", 10) || 0
+          };
+        });
+
+        return { 
+          value: results, 
+          message: "KGCN Extraction complete. Copied.", 
+          errorCount: 0 
+        };
+      }
+    } catch (e) {
+      console.log("Response is not JSON, trying XML parser...", e);
+    }
+
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(responseText, "text/xml");
 
     const parserError = xmlDoc.querySelector("parsererror");
     if (parserError) {
-      return { value: [], message: "Failed to parse API response. It might not be valid XML.", errorCount: 1 };
+      return { value: [], message: "Failed to parse API response. It might not be valid XML or JSON.", errorCount: 1 };
     }
 
     const compeListNodes = xmlDoc.querySelectorAll("data > compeList > compeList");
 
     const results = Array.from(compeListNodes).map((matchNode) => {
-      let matchResult = "PENDING";
+      let matchResult: string | null = null;
       const resultText = matchNode.querySelector("result")?.textContent;
       
       if (resultText === "WIN") {
@@ -1236,12 +1291,44 @@ async function extractStandingKgcn(token: string, starredPlayers: string) {
     }
 
     const responseText = await response.text();
+
+    try {
+      const data = JSON.parse(responseText);
+      const list = Array.isArray(data.data) ? data.data : (data.data?.List || data.data?.item || []);
+      if (Array.isArray(list) && list.length > 0) {
+        const results = list.map((playerNode: any) => {
+          const wins = parseInt(playerNode.wins || "0", 10);
+          const draws = parseInt(playerNode.draws || "0", 10);
+          const points = (wins * 3) + (draws * 0);
+          
+          const gameId = playerNode.cossyId || "";
+          const rawName = playerNode.cossyName || "";
+
+          return {
+            gameId: obfuscateId(gameId),
+            isDropped: String(playerNode.leavingAwayStatus) === '9',
+            name: isPlayerWatched(rawName, gameId) ? `⭐ ${formatName(rawName)}` : formatName(rawName),
+            rank: parseInt(playerNode.rankNo || "0", 10),
+            standing: points
+          };
+        });
+
+        return { 
+          value: results, 
+          message: "KGCN Standings Extraction complete. Copied.", 
+          errorCount: 0 
+        };
+      }
+    } catch (e) {
+      console.log("Response is not JSON, trying XML parser...", e);
+    }
+
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(responseText, "text/xml");
 
     const parserError = xmlDoc.querySelector("parsererror");
     if (parserError) {
-      return { value: [], message: "Failed to parse API response. It might not be valid XML.", errorCount: 1 };
+      return { value: [], message: "Failed to parse API response. It might not be valid XML or JSON.", errorCount: 1 };
     }
 
     const rankingNodes = xmlDoc.querySelectorAll("List > item");
