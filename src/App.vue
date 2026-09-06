@@ -557,27 +557,8 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
   };
 
 
-  const decodeJwt = (token: string) => {
-    try {
-      const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-      }).join(''));
-      return JSON.parse(jsonPayload);
-    } catch (e) {
-      return null;
-    }
-  };
-
   const rawToken = getSupabaseToken();
   if (!rawToken) return { value: undefined, errorCount: 1, message: "Token not found. Please log in to PurpleFox." };
-
-  const decodedToken = decodeJwt(rawToken);
-  const currentUserId = decodedToken ? decodedToken.sub : null;
-  if (!currentUserId) {
-    return { value: undefined, errorCount: 1, message: "Could not identify user from token." };
-  }
 
   const match = window.location.href.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
   if (!match) return { value: undefined, errorCount: 1, message: "Tournament ID not found in the URL." };
@@ -586,43 +567,6 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
   const SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYzNDk5MTIyMiwiZXhwIjoxOTUwNTY3MjIyfQ.i26CuuxL44qZ4roGI3Akzdpx57bGANc4ZaK-nVEwC6I";
 
   try {
-    const profileUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/profiles?select=firstname,lastname&id=eq.${currentUserId}`;
-    const profileResponse = await fetch(profileUrl, {
-      method: "GET",
-      headers: {
-        "apikey": SUPABASE_API_KEY,
-        "Authorization": `Bearer ${rawToken}`,
-        "Content-Type": "application/json"
-      }
-    });
-    if (!profileResponse.ok) throw new Error("Could not fetch user profile.");
-    const profiles = await profileResponse.json();
-    if (!profiles || profiles.length === 0) throw new Error("User profile not found.");
-    const currentUserProfile = profiles[0];
-    const currentUserFirstName = (currentUserProfile.firstname || '').trim().toLowerCase();
-    const currentUserLastName = (currentUserProfile.lastname || '').trim().toLowerCase();
-
-    const rolesUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/roles?select=name,profiles(firstname,lastname)&tournamentId=eq.${tournamentId}&name=eq.admin`;
-    const rolesResponse = await fetch(rolesUrl, {
-      method: "GET",
-      headers: {
-        "apikey": SUPABASE_API_KEY,
-        "Authorization": `Bearer ${rawToken}`,
-        "Content-Type": "application/json"
-      }
-    });
-    if (!rolesResponse.ok) throw new Error("Could not fetch tournament roles.");
-    const admins = await rolesResponse.json();
-
-    const isAdmin = admins.some((admin: { profiles: { firstname: string, lastname: string } }) => 
-      admin.profiles &&
-      (admin.profiles.firstname || '').trim().toLowerCase() === currentUserFirstName &&
-      (admin.profiles.lastname || '').trim().toLowerCase() === currentUserLastName
-    );
-
-    if (!isAdmin) {
-      return { value: undefined, errorCount: 1, message: "You are not an admin for this tournament." };
-    }
 
     const penaltiesUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/tournament_penalities?select=*&tournamentId=eq.${tournamentId}`;
     const penaltiesResponse = await fetch(penaltiesUrl, {
