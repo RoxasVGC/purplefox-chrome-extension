@@ -485,14 +485,20 @@ const extractPurpleFoxDrops = async (): Promise<ScriptResult<string[]>> => {
   if (!match) return { value: [], errorCount: 1, message: "Tournament ID not found in the URL." };
   const tournamentId = match[1];
 
-  const SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYzNDk5MTIyMiwiZXhwIjoxOTUwNTY3MjIyfQ.i26CuuxL44qZ4roGI3Akzdpx57bGANc4ZaK-nVEwC6I";
+  const isUs = window.location.hostname.includes("eor-us.purple-fox.fr");
+  const supabaseUrl = isUs
+    ? "https://upbcarvmkmyzhbosheyo.supabase.co"
+    : "https://nsytfortyuheqhyxxpzl.supabase.co";
+  const supabaseApiKey = isUs
+    ? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwYmNhcnZta215emhib3NoZXlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NTE5MjQ5NjIsImV4cCI6MTk2NzUwMDk2Mn0.Ris66avSM8Qf7yEpyziybP4fm6NB7MPWPR4pRIflamI"
+    : "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYzNDk5MTIyMiwiZXhwIjoxOTUwNTY3MjIyfQ.i26CuuxL44qZ4roGI3Akzdpx57bGANc4ZaK-nVEwC6I";
 
   try {
-    const dropsUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/tournament_drops?select=*&tournamentId=eq.${tournamentId}`;
+    const dropsUrl = `${supabaseUrl}/rest/v1/tournament_drops?select=*&tournamentId=eq.${tournamentId}`;
     const dropsResponse = await fetch(dropsUrl, {
       method: "GET",
       headers: {
-        "apikey": SUPABASE_API_KEY,
+        "apikey": supabaseApiKey,
         "Authorization": `Bearer ${rawToken}`,
         "Content-Type": "application/json"
       }
@@ -564,15 +570,21 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
   if (!match) return { value: undefined, errorCount: 1, message: "Tournament ID not found in the URL." };
   const tournamentId = match[1];
 
-  const SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYzNDk5MTIyMiwiZXhwIjoxOTUwNTY3MjIyfQ.i26CuuxL44qZ4roGI3Akzdpx57bGANc4ZaK-nVEwC6I";
+  const isUs = window.location.hostname.includes("eor-us.purple-fox.fr");
+  const supabaseUrl = isUs
+    ? "https://upbcarvmkmyzhbosheyo.supabase.co"
+    : "https://nsytfortyuheqhyxxpzl.supabase.co";
+  const supabaseApiKey = isUs
+    ? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwYmNhcnZta215emhib3NoZXlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NTE5MjQ5NjIsImV4cCI6MTk2NzUwMDk2Mn0.Ris66avSM8Qf7yEpyziybP4fm6NB7MPWPR4pRIflamI"
+    : "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTYzNDk5MTIyMiwiZXhwIjoxOTUwNTY3MjIyfQ.i26CuuxL44qZ4roGI3Akzdpx57bGANc4ZaK-nVEwC6I";
 
   try {
 
-    const penaltiesUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/tournament_penalities?select=*&tournamentId=eq.${tournamentId}`;
+    const penaltiesUrl = `${supabaseUrl}/rest/v1/tournament_penalities?select=*&tournamentId=eq.${tournamentId}`;
     const penaltiesResponse = await fetch(penaltiesUrl, {
       method: "GET",
       headers: {
-        "apikey": SUPABASE_API_KEY,
+        "apikey": supabaseApiKey,
         "Authorization": `Bearer ${rawToken}`,
         "Content-Type": "application/json"
       }
@@ -583,11 +595,11 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
     if (!data || data.length === 0) return { value: undefined, errorCount: 1, message: "No penalties found." };
 
     // --- FETCH TABLE STATUS (TIME EXTENSIONS) ---
-    const tableStatusUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/table_status?select=*&tournamentId=eq.${tournamentId}`;
+    const tableStatusUrl = `${supabaseUrl}/rest/v1/table_status?select=*&tournamentId=eq.${tournamentId}`;
     const tableStatusResponse = await fetch(tableStatusUrl, {
       method: "GET",
       headers: {
-        "apikey": SUPABASE_API_KEY,
+        "apikey": supabaseApiKey,
         "Authorization": `Bearer ${rawToken}`,
         "Content-Type": "application/json"
       }
@@ -605,11 +617,11 @@ const extractPurpleFoxPenalties = async (): Promise<ScriptResult<void>> => {
     }
 
     // --- FETCH TABLES (TO MAP PLAYER TO TABLE) ---
-    const tablesUrl = `https://nsytfortyuheqhyxxpzl.supabase.co/rest/v1/tables?select=*&tournamentId=eq.${tournamentId}`;
+    const tablesUrl = `${supabaseUrl}/rest/v1/tables?select=*&tournamentId=eq.${tournamentId}`;
     const tablesResponse = await fetch(tablesUrl, {
       method: "GET",
       headers: {
-        "apikey": SUPABASE_API_KEY,
+        "apikey": supabaseApiKey,
         "Authorization": `Bearer ${rawToken}`,
         "Content-Type": "application/json"
       }

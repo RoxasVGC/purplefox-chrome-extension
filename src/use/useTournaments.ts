@@ -1,7 +1,10 @@
 import { ref, computed } from "vue";
 const tournaments = ref({});
 
-function handleStorageChange(changes, namespace) {
+function handleStorageChange(
+    changes: { [key: string]: chrome.storage.StorageChange },
+    namespace: string
+) {
     if (changes["TOURNAMENT_NAMES"]) {
         tournaments.value = changes.TOURNAMENT_NAMES.newValue;
     }

@@ -18,7 +18,10 @@ export function usePath() {
         currentSoftware.value = "carde";
         canExtractResults.value = url.includes("/pairings");
         canExtractStandings.value = url.includes("/standings");
-      } else if (url.includes("https://eor.purple-fox.fr")) {
+      } else if (
+        url.includes("eor.purple-fox.fr") ||
+        url.includes("eor-us.purple-fox.fr")
+      ) {
         currentSoftware.value = "purplefox";
       } else if (url.includes("cardgame-network.konami.net")) {
         currentSoftware.value = "kgcn";

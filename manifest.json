@@ -25,6 +25,7 @@
         "*://*.rk9.gg/*",
         "*://*.cardgame-network.konami.net/*",
         "*://eor.purple-fox.fr/*",     
+        "*://eor-us.purple-fox.fr/*",     
         "*://*.supabase.co/*"
     ]
 }
