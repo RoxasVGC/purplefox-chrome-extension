@@ -7,7 +7,7 @@
       </p>
       <p class="text-center" v-else>No known software detected</p>
 
-      <div v-if="currentSoftware === 'carde'" class="flex justify-center mt-2">
+      <div v-if="['carde', 'riftbound'].includes(currentSoftware || '')" class="flex justify-center mt-2">
         <button
           class="button"
           @click="extractPlayers"
@@ -52,7 +52,7 @@
         </button>
       </div>
 
-      <p v-else-if="!['carde', 'purplefox', 'kgcn'].includes(currentSoftware || '')">No action possible on this page</p>
+      <p v-else-if="!['carde', 'purplefox', 'kgcn', 'riftbound'].includes(currentSoftware || '')">No action possible on this page</p>
 
       <div v-if="isLoading" class="loader"></div>
       <p v-if="message" class="mt-2">{{ message }}</p>
@@ -214,6 +214,7 @@ export default defineComponent({
           func: (
             this.currentSoftware === "gem" ? extractResultGem :
             this.currentSoftware === "kgcn" ? extractResultKgcn :
+            this.currentSoftware === "riftbound" ? extractResultRiftbound :
             extractResultCarde
           ) as any,
           args: [this.token || "", this.starredPlayers || ""],
@@ -272,6 +273,7 @@ export default defineComponent({
           target: { tabId: tab.id as number },
           func: (
             this.currentSoftware === "kgcn" ? extractStandingKgcn :
+            this.currentSoftware === "riftbound" ? extractStandingRiftbound :
             extractStandingCarde
           ) as any,
           args: [this.token || "", this.starredPlayers || ""],
@@ -304,7 +306,10 @@ export default defineComponent({
       chrome.scripting.executeScript(
         {
           target: { tabId: tab.id as number },
-          func: extractPlayersCarde as any,
+          func: (
+            this.currentSoftware === "riftbound" ? extractPlayersRiftbound :
+            extractPlayersCarde
+          ) as any,
           args: [this.token || ""],
         },
         (results: chrome.scripting.InjectionResult[]) => {
@@ -1317,6 +1322,284 @@ async function extractStandingKgcn(token: string, starredPlayers: string) {
   }
 }
 
+async function extractResultRiftbound(_token: string, starredPlayers: string) {
+  const match = window.location.pathname.match(/\/events\/(\d+)/);
+  if (!match) {
+    return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
+  }
+  const tournamentId = match[1];
+
+  const watchedPlayerLines = (starredPlayers || '').toLowerCase().split('\n').map(p => p.trim()).filter(Boolean);
+  const isPlayerWatched = (name: string, id: string) => {
+    if (watchedPlayerLines.length === 0) return false;
+    const lowerCaseName = name.toLowerCase();
+    return watchedPlayerLines.some(line => lowerCaseName.includes(line) || (id && line === id.toLowerCase()));
+  };
+
+  const hash = 'e56d6d93e4f8fa287557521535544350e5cc9baafd78ba69f9f592873b090e57';
+  const variables = JSON.stringify({ tournamentId });
+  const extensions = JSON.stringify({
+    clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+    persistedQuery: { version: 1, sha256Hash: hash }
+  });
+
+  const url = `https://rgn.playriftbound.com/api/gql?operationName=GetCompeteTournamentForRiftboundPlayer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'accept': 'application/graphql-response+json,application/json;q=0.9',
+        'apollographql-client-name': 'Esports Web',
+        'apollographql-client-version': 'f982731',
+        'content-type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      return { value: [], message: `Error fetching data: ${response.statusText || response.status}`, errorCount: 1 };
+    }
+
+    const json = await response.json();
+    const tournament = json?.data?.competeTournaments?.[0];
+    if (!tournament || !tournament.stages || tournament.stages.length === 0) {
+      return { value: [], message: "Tournament data not found", errorCount: 1 };
+    }
+
+    const rounds = tournament.stages[0]?.sections?.[0]?.rounds || [];
+    if (rounds.length === 0) {
+      return { value: [], message: "No round started yet", errorCount: 1 };
+    }
+
+    const currentRound = rounds[rounds.length - 1];
+    const results: any[] = [];
+
+    (currentRound.matches || []).forEach((m: any) => {
+      const team1 = m.teams?.[0];
+      const team2 = m.teams?.[1];
+      const p1 = team1?.players?.[0];
+      const p2 = team2?.players?.[0];
+
+      let matchResult: string | null = null;
+      if (m.status === 'COMPLETED' || m.status === 'COMPLETE') {
+        const outcomes = m.teamOutcomes || [];
+        const winOutcome = outcomes.find((o: any) => o.outcome === 'WIN');
+        const tieOutcome = outcomes.find((o: any) => o.outcome === 'TIE' || o.outcome === 'DRAW');
+
+        if (winOutcome) {
+          if (winOutcome.esportsTeamId === team1?.esportsTeamId) {
+            matchResult = '1WIN';
+          } else if (winOutcome.esportsTeamId === team2?.esportsTeamId) {
+            matchResult = '2WIN';
+          }
+        } else if (tieOutcome) {
+          matchResult = 'DRAW';
+        }
+      }
+
+      const rawName1 = p1?.displayName || "";
+      const rawName2 = p2?.displayName || "";
+      const id1 = p1?.id || "";
+      const id2 = p2?.id || "";
+
+      results.push({
+        tableNumber: m.tableNumber,
+        playerName1: isPlayerWatched(rawName1, id1) ? `⭐ ${rawName1}` : (rawName1 || null),
+        playerGameId1: id1 || null,
+        playerName2: isPlayerWatched(rawName2, id2) ? `⭐ ${rawName2}` : (rawName2 || null),
+        playerGameId2: id2 || null,
+        result: matchResult
+      });
+    });
+
+    if (currentRound.byeTeamIds && currentRound.byeTeamIds.length > 0) {
+      const participants = tournament.tournamentParticipants || [];
+      currentRound.byeTeamIds.forEach((teamId: string, idx: number) => {
+        const part = participants.find((p: any) => p.esportsTeamId === teamId);
+        if (part && part.player) {
+          const rawName = part.player.displayName;
+          const id = part.player.id;
+          results.push({
+            tableNumber: 999 + idx,
+            playerName1: isPlayerWatched(rawName, id) ? `⭐ ${rawName}` : rawName,
+            playerGameId1: id,
+            playerName2: "BYE",
+            playerGameId2: "BYE",
+            result: "1WIN"
+          });
+        }
+      });
+    }
+
+    results.sort((a, b) => a.tableNumber - b.tableNumber);
+
+    return {
+      value: results,
+      message: "Copied to clipboard",
+      errorCount: 0
+    };
+  } catch (error: unknown) {
+    return { value: [], message: `Error: ${(error as Error).message}`, errorCount: 1 };
+  }
+}
+
+async function extractStandingRiftbound(_token: string, starredPlayers: string) {
+  const match = window.location.pathname.match(/\/events\/(\d+)/);
+  if (!match) {
+    return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
+  }
+  const tournamentId = match[1];
+
+  const watchedPlayerLines = (starredPlayers || '').toLowerCase().split('\n').map(p => p.trim()).filter(Boolean);
+  const isPlayerWatched = (name: string, id: string) => {
+    if (watchedPlayerLines.length === 0) return false;
+    const lowerCaseName = name.toLowerCase();
+    return watchedPlayerLines.some(line => lowerCaseName.includes(line) || (id && line === id.toLowerCase()));
+  };
+
+  const hash = 'e56d6d93e4f8fa287557521535544350e5cc9baafd78ba69f9f592873b090e57';
+  const variables = JSON.stringify({ tournamentId });
+  const extensions = JSON.stringify({
+    clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+    persistedQuery: { version: 1, sha256Hash: hash }
+  });
+
+  const url = `https://rgn.playriftbound.com/api/gql?operationName=GetCompeteTournamentForRiftboundPlayer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'accept': 'application/graphql-response+json,application/json;q=0.9',
+        'apollographql-client-name': 'Esports Web',
+        'apollographql-client-version': 'f982731',
+        'content-type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      return { value: [], message: `Error fetching data: ${response.statusText || response.status}`, errorCount: 1 };
+    }
+
+    const json = await response.json();
+    const tournament = json?.data?.competeTournaments?.[0];
+    if (!tournament) {
+      return { value: [], message: "Tournament data not found", errorCount: 1 };
+    }
+
+    const participants = tournament.tournamentParticipants || [];
+    const rounds = tournament.stages?.[0]?.sections?.[0]?.rounds || [];
+
+    let standingsList: any[] | null = null;
+    for (let i = rounds.length - 1; i >= 0; i--) {
+      if (rounds[i].endOfRoundStandings && rounds[i].endOfRoundStandings.length > 0) {
+        standingsList = rounds[i].endOfRoundStandings;
+        break;
+      }
+    }
+
+    if (!standingsList || standingsList.length === 0) {
+      if (participants.length > 0) {
+        const initial = participants.map((p: any, idx: number) => {
+          const rawName = p.player?.displayName || "Unknown";
+          const id = p.player?.id || "";
+          return {
+            name: isPlayerWatched(rawName, id) ? `⭐ ${rawName}` : rawName,
+            gameId: id,
+            standing: 0,
+            isDropped: p.status === "DROPPED",
+            rank: idx + 1
+          };
+        });
+        return {
+          value: initial,
+          message: "Copied to clipboard",
+          errorCount: 0
+        };
+      }
+      return { value: [], message: "No standings available yet", errorCount: 0 };
+    }
+
+    const results = standingsList.map((item: any) => {
+      const part = participants.find((p: any) => p.esportsTeamId === item.esportsTeamId);
+      const rawName = part?.player?.displayName || item.esportsTeamId;
+      const id = part?.player?.id || item.esportsTeamId;
+
+      return {
+        name: isPlayerWatched(rawName, id) ? `⭐ ${rawName}` : rawName,
+        gameId: id,
+        standing: item.matchPoints ?? 0,
+        isDropped: part?.status === "DROPPED",
+        rank: item.rank
+      };
+    });
+
+    results.sort((a, b) => a.rank - b.rank);
+
+    return {
+      value: results,
+      message: "Copied to clipboard",
+      errorCount: 0
+    };
+  } catch (error: unknown) {
+    return { value: [], message: `Error: ${(error as Error).message}`, errorCount: 1 };
+  }
+}
+
+async function extractPlayersRiftbound(_token: string) {
+  const match = window.location.pathname.match(/\/events\/(\d+)/);
+  if (!match) {
+    return { value: [], message: "Tournament ID not found in URL", errorCount: 1 };
+  }
+  const tournamentId = match[1];
+
+  const hash = 'e56d6d93e4f8fa287557521535544350e5cc9baafd78ba69f9f592873b090e57';
+  const variables = JSON.stringify({ tournamentId });
+  const extensions = JSON.stringify({
+    clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+    persistedQuery: { version: 1, sha256Hash: hash }
+  });
+
+  const url = `https://rgn.playriftbound.com/api/gql?operationName=GetCompeteTournamentForRiftboundPlayer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'accept': 'application/graphql-response+json,application/json;q=0.9',
+        'apollographql-client-name': 'Esports Web',
+        'apollographql-client-version': 'f982731',
+        'content-type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      return { value: [], message: `Error fetching data: ${response.statusText || response.status}`, errorCount: 1 };
+    }
+
+    const json = await response.json();
+    const tournament = json?.data?.competeTournaments?.[0];
+    const registrants = tournament?.tournamentRegistrants || [];
+
+    const players = registrants.map((r: any) => {
+      const p = r.player;
+      const tag = p?.tagLine ? `#${p.tagLine}` : "";
+      return {
+        name: p?.displayName ? `${p.displayName}${tag}` : "Unknown",
+        gameId: p?.id || r.id,
+        deckName: ""
+      };
+    });
+
+    return {
+      value: players,
+      message: "Copied to clipboard",
+      errorCount: 0
+    };
+  } catch (error: unknown) {
+    return { value: [], message: `Error: ${(error as Error).message}`, errorCount: 1 };
+  }
+}
 </script>
 
 <style scoped>

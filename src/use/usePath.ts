@@ -27,6 +27,10 @@ export function usePath() {
         currentSoftware.value = "kgcn";
         canExtractResults.value = true;
         canExtractStandings.value = true;
+      } else if (url.includes("playriftbound.com")) {
+        currentSoftware.value = "riftbound";
+        canExtractResults.value = url.includes("/events/");
+        canExtractStandings.value = url.includes("/events/");
       }
     }
   });
