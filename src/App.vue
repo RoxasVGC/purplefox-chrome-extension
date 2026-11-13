@@ -16,6 +16,16 @@
           Extract players
         </button>
       </div>
+
+      <div v-if="currentSoftware === 'riftbound' && canExtractResults" class="flex justify-center mt-2">
+        <button
+          class="button"
+          @click="downloadDecklistsRiftbound"
+          :disabled="isLoading"
+        >
+          Download decklists CSV
+        </button>
+      </div>
 <div v-if="canExtractHeroes" class="flex justify-center mt-2">
         <button class="button" @click="extractHeroes" :disabled="isLoading">
           Extract heroes
@@ -34,7 +44,7 @@
         </button>
       </div>
 
-      <div v-if="canExtractStandings && currentSoftware === 'carde'" class="flex justify-center mt-2">
+      <div v-if="canExtractStandings && ['carde', 'riftbound'].includes(currentSoftware || '')" class="flex justify-center mt-2">
         <button class="button" @click="extractBestOfDecks" :disabled="isLoading">
           Extract best of decks
         </button>
@@ -330,6 +340,60 @@ export default defineComponent({
         }
       );
     },
+    async downloadDecklistsRiftbound() {
+      this.isLoading = true;
+      this.message = "Caricamento liste in corso...";
+      let [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (!tab) {
+        this.isLoading = false;
+        return;
+      }
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tab.id as number },
+          func: extractDecklistsRiftbound as any,
+          args: [],
+        },
+        (results: chrome.scripting.InjectionResult[]) => {
+          if ((chrome.runtime as any).lastError || !results || !results[0]) {
+            this.message = "Script Error: " + ((chrome.runtime as any).lastError?.message || "unknown");
+            this.isLoading = false;
+            return;
+          }
+          const result = results[0].result as ScriptResult<{
+            csvText: string;
+            filename: string;
+            noDeckCount: number;
+            withDeckCount: number;
+          }>;
+          if (result.errorCount > 0) {
+            this.message = result.message;
+            this.isLoading = false;
+            return;
+          }
+
+          const { csvText, filename } = result.value;
+          const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8;" });
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = filename || "decklists.csv";
+          link.style.visibility = "hidden";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          this.message = result.message;
+          setTimeout(() => {
+            this.message = "";
+          }, 3000);
+          this.isLoading = false;
+        }
+      );
+    },
     async extractBestOfDecks() {
       this.isLoading = true;
       let [tab] = await chrome.tabs.query({
@@ -340,7 +404,10 @@ export default defineComponent({
       chrome.scripting.executeScript(
         {
           target: { tabId: tab.id as number },
-          func: extractBestOfDecksCarde as any,
+          func: (
+            this.currentSoftware === "riftbound" ? extractBestOfDecksRiftbound :
+            extractBestOfDecksCarde
+          ) as any,
           args: [this.token || ""],
         },
         (results: chrome.scripting.InjectionResult[]) => {
@@ -1599,6 +1666,506 @@ async function extractPlayersRiftbound(_token: string) {
   } catch (error: unknown) {
     return { value: [], message: `Error: ${(error as Error).message}`, errorCount: 1 };
   }
+}
+
+async function extractDecklistsRiftbound() {
+  const match = window.location.pathname.match(/\/events\/(\d+)/);
+  if (!match) {
+    return { value: null, message: "ID torneo non trovato nell'URL", errorCount: 1 };
+  }
+  const tournamentId = match[1];
+
+  const orgMatch = window.location.pathname.match(/\/org\/([a-f0-9-]+)\/events/i);
+  let orgId = orgMatch ? orgMatch[1] : "";
+
+  // 1. Fetch tournament details
+  let tournament: any = null;
+  const tournamentHashes = [
+    'e56d6d93e4f8fa287557521535544350e5cc9baafd78ba69f9f592873b090e57',
+    '420b49ecac6d8601e2059ad31f599d4854938e70e69938e47293c22dc0ea0843'
+  ];
+
+  for (const h of tournamentHashes) {
+    try {
+      const variables = JSON.stringify({ tournamentId, includeAdminFields: false });
+      const extensions = JSON.stringify({
+        clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+        persistedQuery: { version: 1, sha256Hash: h }
+      });
+      const url = `https://rgn.playriftbound.com/api/gql?operationName=GetCompeteTournamentForRiftboundPlayer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'accept': 'application/graphql-response+json,application/json;q=0.9',
+          'apollographql-client-name': 'Esports Web',
+          'apollographql-client-version': '529fb89',
+          'content-type': 'application/json'
+        },
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const json = await response.json();
+        const t = json?.data?.competeTournaments?.[0];
+        if (t) {
+          tournament = t;
+          break;
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!tournament) {
+    return { value: null, message: "Dati del torneo non trovati", errorCount: 1 };
+  }
+
+  if (!orgId && tournament.organizerId) {
+    orgId = tournament.organizerId;
+  }
+
+  // 2. Collect unique players
+  const playerMap = new Map<string, { playerId: string; name: string }>();
+
+  (tournament.tournamentRegistrants || []).forEach((r: any) => {
+    const p = r.player;
+    const playerId = p?.id || r.playerId || r.id;
+    if (playerId) {
+      const tag = p?.tagLine ? `#${p.tagLine}` : "";
+      const name = p?.displayName ? `${p.displayName}${tag}` : (r.displayName || "Unknown");
+      playerMap.set(playerId, { playerId, name });
+    }
+  });
+
+  (tournament.tournamentParticipants || []).forEach((part: any) => {
+    const p = part.player;
+    const playerId = p?.id || part.id;
+    if (playerId && !playerMap.has(playerId)) {
+      const tag = p?.tagLine ? `#${p.tagLine}` : "";
+      const name = p?.displayName ? `${p.displayName}${tag}` : "Unknown";
+      playerMap.set(playerId, { playerId, name });
+    }
+  });
+
+  const players = Array.from(playerMap.values());
+  if (players.length === 0) {
+    return { value: null, message: "Nessun partecipante trovato nel torneo", errorCount: 1 };
+  }
+
+  // 3. Fetch deck submissions for each player
+  const deckSubmissionHashes = [
+    'e0c59f111464532ddfd4ee2af7e0e1ad77ea0ce522a971541c82bc482f1eb1c4',
+    'f54f18c8b192f3541f83fb7e66aab1f0aebd55319c319bfcbb118419f71eefa1'
+  ];
+
+  let unauthenticatedError = false;
+
+  const fetchPlayerDeck = async (playerId: string) => {
+    for (const h of deckSubmissionHashes) {
+      try {
+        const variables = JSON.stringify({ esportsTournamentId: tournamentId, playerId });
+        const extensions = JSON.stringify({
+          clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+          persistedQuery: { version: 1, sha256Hash: h }
+        });
+        const url = `https://rgn.playriftbound.com/api/gql?operationName=RiftboundDeckSubmissionForOrganizer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+        const headers: Record<string, string> = {
+          'accept': 'application/graphql-response+json,application/json;q=0.9',
+          'apollographql-client-name': 'Esports Web',
+          'apollographql-client-version': '529fb89',
+          'content-type': 'application/json'
+        };
+        if (orgId) {
+          headers['X-Organizer-Id'] = orgId;
+        }
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers,
+          credentials: 'include'
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json?.errors && json.errors.some((e: any) => e.extensions?.classification === 'UNAUTHENTICATED')) {
+            unauthenticatedError = true;
+            return null;
+          }
+          const submission = json?.data?.riftboundDeckSubmissionForOrganizer;
+          if (submission) {
+            return submission;
+          }
+        }
+      } catch (e) {}
+    }
+    return null;
+  };
+
+  const results = await Promise.all(
+    players.map(async (p) => {
+      const submission = await fetchPlayerDeck(p.playerId);
+      return {
+        ...p,
+        deckName: submission?.deckName || "",
+        deckText: submission?.deckText || ""
+      };
+    })
+  );
+
+  if (unauthenticatedError) {
+    return {
+      value: null,
+      message: "Errore: Devi essere autenticato come organizzatore su RGN per accedere alle liste.",
+      errorCount: 1
+    };
+  }
+
+  const playersWithoutDeck: { name: string; playerId: string; status: string }[] = [];
+  const playersWithDeck: { name: string; playerId: string; deckName: string; deckText: string }[] = [];
+
+  results.forEach((p) => {
+    if (p.deckText && p.deckText.trim()) {
+      playersWithDeck.push(p);
+    } else {
+      playersWithoutDeck.push({
+        name: p.name,
+        playerId: p.playerId,
+        status: "SENZA LISTA"
+      });
+    }
+  });
+
+  const escapeCsv = (val: string) => `"${(val || "").replace(/"/g, '""')}"`;
+
+  const rowsWithoutDeck = playersWithoutDeck.map(p =>
+    `${escapeCsv(p.name)},${escapeCsv(p.playerId)},${escapeCsv(p.status)}`
+  );
+
+  const rowsWithDeck = playersWithDeck.map(p =>
+    `${escapeCsv(p.name)},${escapeCsv(p.playerId)},${escapeCsv(p.deckName)},${escapeCsv(p.deckText)}`
+  );
+
+  const csvSections: string[] = [];
+
+  // In cima, la lista dei partecipanti SENZA lista
+  csvSections.push("PARTECIPANTI SENZA LISTA");
+  csvSections.push("Player,Player ID,Status");
+  if (rowsWithoutDeck.length > 0) {
+    csvSections.push(...rowsWithoutDeck);
+  } else {
+    csvSections.push('"Nessun partecipante senza lista","",""');
+  }
+
+  csvSections.push("");
+
+  csvSections.push("LISTE DEI PARTECIPANTI");
+  csvSections.push("Player,Player ID,Deck Name,Decklist");
+  if (rowsWithDeck.length > 0) {
+    csvSections.push(...rowsWithDeck);
+  } else {
+    csvSections.push('"Nessuna lista inviata","","",""');
+  }
+
+  const csvText = csvSections.join("\r\n");
+  const tournamentName = tournament.name || "torneo";
+  const safeName = tournamentName.replace(/[^a-zA-Z0-9_\-]/g, "_").replace(/_+/g, "_");
+  const filename = `liste_${safeName}_${tournamentId}.csv`;
+
+  return {
+    value: {
+      csvText,
+      filename,
+      noDeckCount: playersWithoutDeck.length,
+      withDeckCount: playersWithDeck.length
+    },
+    message: `Scaricato CSV: ${playersWithDeck.length} liste trovate, ${playersWithoutDeck.length} senza lista.`,
+    errorCount: 0
+  };
+}
+
+async function extractBestOfDecksRiftbound(_token: string) {
+  const match = window.location.pathname.match(/\/events\/(\d+)/);
+  if (!match) {
+    return {
+      value: { bestDecks: [], unknownDecks: [] },
+      message: "ID torneo non trovato nell'URL",
+      errorCount: 1,
+    };
+  }
+  const tournamentId = match[1];
+
+  const orgMatch = window.location.pathname.match(/\/org\/([a-f0-9-]+)\/events/i);
+  let orgId = orgMatch ? orgMatch[1] : "";
+
+  // 1. Fetch tournament details
+  let tournament: any = null;
+  const tournamentHashes = [
+    '420b49ecac6d8601e2059ad31f599d4854938e70e69938e47293c22dc0ea0843',
+    'e56d6d93e4f8fa287557521535544350e5cc9baafd78ba69f9f592873b090e57'
+  ];
+
+  for (const h of tournamentHashes) {
+    try {
+      const variables = JSON.stringify({ tournamentId, includeAdminFields: false });
+      const extensions = JSON.stringify({
+        clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+        persistedQuery: { version: 1, sha256Hash: h }
+      });
+      const url = `https://rgn.playriftbound.com/api/gql?operationName=GetCompeteTournamentForRiftboundPlayer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'accept': 'application/graphql-response+json,application/json;q=0.9',
+          'apollographql-client-name': 'Esports Web',
+          'apollographql-client-version': '529fb89',
+          'content-type': 'application/json'
+        },
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const json = await response.json();
+        const t = json?.data?.competeTournaments?.[0];
+        if (t) {
+          tournament = t;
+          break;
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!tournament) {
+    return {
+      value: { bestDecks: [], unknownDecks: [] },
+      message: "Dati del torneo non trovati",
+      errorCount: 1,
+    };
+  }
+
+  if (!orgId && tournament.organizerId) {
+    orgId = tournament.organizerId;
+  }
+
+  const participants = tournament.tournamentParticipants || [];
+  const rounds = tournament.stages?.[0]?.sections?.[0]?.rounds || [];
+
+  let standingsList: any[] | null = null;
+  for (let i = rounds.length - 1; i >= 0; i--) {
+    if (rounds[i].endOfRoundStandings && rounds[i].endOfRoundStandings.length > 0) {
+      standingsList = rounds[i].endOfRoundStandings;
+      break;
+    }
+  }
+
+  if (!standingsList || standingsList.length === 0) {
+    return {
+      value: { bestDecks: [], unknownDecks: [] },
+      message: "Nessuna classifica (standings) disponibile per questo torneo",
+      errorCount: 1,
+    };
+  }
+
+  // 2. Fetch deck submissions
+  const deckSubmissionHashes = [
+    'e0c59f111464532ddfd4ee2af7e0e1ad77ea0ce522a971541c82bc482f1eb1c4',
+    'f54f18c8b192f3541f83fb7e66aab1f0aebd55319c319bfcbb118419f71eefa1'
+  ];
+
+  const fetchPlayerDeck = async (playerId: string) => {
+    for (const h of deckSubmissionHashes) {
+      try {
+        const variables = JSON.stringify({ esportsTournamentId: tournamentId, playerId });
+        const extensions = JSON.stringify({
+          clientLibrary: { name: '@apollo/client', version: '4.1.9' },
+          persistedQuery: { version: 1, sha256Hash: h }
+        });
+        const url = `https://rgn.playriftbound.com/api/gql?operationName=RiftboundDeckSubmissionForOrganizer&variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
+        const headers: Record<string, string> = {
+          'accept': 'application/graphql-response+json,application/json;q=0.9',
+          'apollographql-client-name': 'Esports Web',
+          'apollographql-client-version': '529fb89',
+          'content-type': 'application/json'
+        };
+        if (orgId) {
+          headers['X-Organizer-Id'] = orgId;
+        }
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers,
+          credentials: 'include'
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          const submission = json?.data?.riftboundDeckSubmissionForOrganizer;
+          if (submission) {
+            return submission;
+          }
+        }
+      } catch (e) {}
+    }
+    return null;
+  };
+
+  const cleanCardName = (line: string): string => {
+    return line
+      .replace(/^\/\/\s*/, "")
+      .replace(/^\d+\s+/, "")
+      .replace(/\s*\([^)]*\)\s*$/, "")
+      .replace(/\s*\[[^\]]*\]\s*$/, "")
+      .trim();
+  };
+
+  const isSectionHeader = (line: string): boolean => {
+    return /^(?:\/\/|\/\*|#)?\s*(?:\d+\s+)?(?:legend|champion|chosen champion|main deck|rune deck|runes|battlefield|battlefields|sideboard)\b/i.test(line);
+  };
+
+  const parseDeckName = (submission: any): string => {
+    const deckText = submission?.deckText || "";
+    const deckName = submission?.deckName || "";
+
+    if (deckText && deckText.trim()) {
+      const lines = deckText.split("\n").map((l: string) => l.trim()).filter(Boolean);
+
+      // 1. Cerca specificamente la sezione o riga Legend
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const inlineMatch = line.match(/^(?:\/\/|\/\*|#)?\s*(?:\d+\s+)?legend\s*[:\-]\s*(.+)/i);
+        if (inlineMatch && inlineMatch[1]) {
+          const card = cleanCardName(inlineMatch[1]);
+          if (card) return card;
+        }
+
+        if (/^(?:\/\/|\/\*|#)?\s*(?:\d+\s+)?legend\s*(?:\(\d+.*\))?$/i.test(line)) {
+          if (i + 1 < lines.length && !isSectionHeader(lines[i + 1])) {
+            const card = cleanCardName(lines[i + 1]);
+            if (card) return card;
+          }
+        }
+      }
+
+      // 2. Cerca Chosen Champion / Champion
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const inlineMatch = line.match(/^(?:\/\/|\/\*|#)?\s*(?:\d+\s+)?(?:chosen\s+)?champion\s*[:\-]\s*(.+)/i);
+        if (inlineMatch && inlineMatch[1]) {
+          const card = cleanCardName(inlineMatch[1]);
+          if (card) return card;
+        }
+
+        if (/^(?:\/\/|\/\*|#)?\s*(?:\d+\s+)?(?:chosen\s+)?champion\s*(?:\(\d+.*\))?$/i.test(line)) {
+          if (i + 1 < lines.length && !isSectionHeader(lines[i + 1])) {
+            const card = cleanCardName(lines[i + 1]);
+            if (card) return card;
+          }
+        }
+      }
+    }
+
+    // 3. Se presente deckName personalizzato e non generico
+    if (deckName && deckName.trim()) {
+      const trimmed = deckName.trim();
+      if (!/^(?:deck|mazzo|untitled|nuovo mazzo|test|lista|\d+)$/i.test(trimmed)) {
+        return trimmed;
+      }
+    }
+
+    // 4. Fallback prima carta valida nella lista
+    if (deckText && deckText.trim()) {
+      const lines = deckText.split("\n").map((l: string) => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (!isSectionHeader(line)) {
+          const card = cleanCardName(line);
+          if (card && card.length > 2 && card.length < 60) {
+            return card;
+          }
+        }
+      }
+    }
+
+    return "Unknown";
+  };
+
+  const standingsWithPlayers = standingsList.map((item: any) => {
+    const part = participants.find((p: any) => p.esportsTeamId === item.esportsTeamId);
+    const tag = part?.player?.tagLine ? `#${part.player.tagLine}` : "";
+    const name = part?.player?.displayName ? `${part.player.displayName}${tag}` : (item.esportsTeamId || "Unknown");
+    const playerId = part?.player?.id || item.esportsTeamId;
+    return {
+      name,
+      gameId: playerId,
+      rank: item.rank,
+      points: item.matchPoints ?? 0,
+      playerId: part?.player?.id || null,
+    };
+  });
+
+  const playersWithDecks = await Promise.all(
+    standingsWithPlayers.map(async (p: any) => {
+      let deckName = "Unknown";
+      if (p.playerId) {
+        const submission = await fetchPlayerDeck(p.playerId);
+        deckName = parseDeckName(submission);
+      }
+      return {
+        ...p,
+        deckName,
+      };
+    })
+  );
+
+  const deckBests = new Map<string, any>();
+  const allUnknowns: any[] = [];
+  const top8DeckCounts = new Map<string, number>();
+
+  for (const p of playersWithDecks) {
+    const gameId = p.gameId;
+    const rank = p.rank;
+    const name = p.name;
+    const deckName = p.deckName || "Unknown";
+    const points = p.points;
+
+    if (rank <= 8 && deckName !== "Unknown") {
+      top8DeckCounts.set(deckName, (top8DeckCounts.get(deckName) || 0) + 1);
+    }
+
+    if (deckName === "Unknown") {
+      allUnknowns.push({ name, gameId, rank, deckName, points });
+    } else {
+      if (!deckBests.has(deckName) || rank < deckBests.get(deckName).rank) {
+        deckBests.set(deckName, { name, gameId, rank, deckName, points });
+      }
+    }
+  }
+
+  const bestDecks = Array.from(deckBests.values()).map((best) => {
+    const inTop8 = best.rank <= 8;
+    const countInTop8 = top8DeckCounts.get(best.deckName) || 0;
+    return {
+      ...best,
+      isPlayerPending: inTop8 && countInTop8 > 1,
+      finalPosition: inTop8 ? "PENDING" : best.rank,
+    };
+  });
+
+  bestDecks.sort((a, b) => {
+    if (a.finalPosition === "PENDING" && b.finalPosition !== "PENDING") return -1;
+    if (a.finalPosition !== "PENDING" && b.finalPosition === "PENDING") return 1;
+    return a.rank - b.rank;
+  });
+
+  const maxRank = bestDecks.length > 0 ? Math.max(...bestDecks.map((d: any) => d.rank)) : Infinity;
+
+  const unknownDecks = allUnknowns
+    .filter((u) => u.rank <= maxRank)
+    .map((u) => ({
+      ...u,
+      finalPosition: u.rank <= 8 ? "PENDING" : u.rank,
+    }));
+
+  return {
+    value: { bestDecks, unknownDecks },
+    message: "Best of decks downloaded!",
+    errorCount: 0,
+  };
 }
 </script>
 
